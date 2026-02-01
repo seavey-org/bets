@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { watch } from 'vue'
 import api from '../services/api'
 
 interface User {
@@ -28,6 +29,22 @@ export const useAuthStore = defineStore('auth', {
       } finally {
         this.loading = false
       }
+    },
+
+    /** Returns a promise that resolves once loading becomes false. */
+    untilReady() {
+      if (!this.loading) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        const unwatch = watch(
+          () => this.loading,
+          (loading) => {
+            if (!loading) {
+              unwatch()
+              resolve()
+            }
+          },
+        )
+      })
     },
 
     async logout() {

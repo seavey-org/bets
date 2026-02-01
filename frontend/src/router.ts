@@ -87,8 +87,14 @@ export const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
+
+  // On initial navigation the auth store may still be loading from /auth/me.
+  // Wait for it to finish so the guard has accurate auth state.
+  if (authStore.loading) {
+    await authStore.untilReady()
+  }
 
   if (to.meta.auth && !authStore.isAuthenticated) {
     next('/login')
