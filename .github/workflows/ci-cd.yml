@@ -132,6 +132,9 @@ jobs:
             set -e
             cd ~/bets
 
+            # Authenticate to GHCR before pulling
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
             # Pull new image while old is still running
             docker pull ghcr.io/codyseavey/bets/app:${{ github.sha }}
 
