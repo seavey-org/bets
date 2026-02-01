@@ -616,25 +616,15 @@ func (s *MarketService) costViaCompleteSets(outcomes []models.MarketOutcome, tar
 	
 	if n == 2 {
 		// Binary market: solve quadratic
-		a := outcomes[0].Shares
-		b := outcomes[1].Shares
-		k := a * b
-		
-		var target, other float64
+		// (target + C - shares)(other + C) = target * other
+		// Simplifies to: C^2 + C*(target + other - shares) - shares*other = 0
+		var other float64
 		if targetIdx == 0 {
-			target = a
-			other = b
+			other = outcomes[1].Shares
 		} else {
-			target = b
-			other = a
+			other = outcomes[0].Shares
 		}
 		
-		// (target + C - shares)(other + C) = k
-		// C^2 + C*(target - shares + other) + (target - shares)*other - k = 0
-		// C^2 + C*(target + other - shares) + (target*other - shares*other - k) = 0
-		// Since k = target*other:
-		// C^2 + C*(target + other - shares) - shares*other = 0
-		_ = target
 		A := 1.0
 		B := (outcomes[0].Shares + outcomes[1].Shares - shares)
 		C := -shares * other
@@ -683,10 +673,6 @@ func (s *MarketService) costViaCompleteSets(outcomes []models.MarketOutcome, tar
 // This is the reverse of buying: user returns shares to pool, receives points.
 func (s *MarketService) calculateSellPayout(outcomes []models.MarketOutcome, targetIdx int, shares float64) float64 {
 	n := len(outcomes)
-	k := 1.0
-	for _, o := range outcomes {
-		k *= o.Shares
-	}
 	
 	if n == 2 {
 		// Selling s shares of target: user puts s back, extracts C complete sets.
@@ -732,6 +718,10 @@ func (s *MarketService) calculateSellPayout(outcomes []models.MarketOutcome, tar
 	}
 	
 	// For n > 2: binary search
+	k := 1.0
+	for _, o := range outcomes {
+		k *= o.Shares
+	}
 	lo, hi := 0.0, 10000.0
 	for iter := 0; iter < 100; iter++ {
 		mid := (lo + hi) / 2
