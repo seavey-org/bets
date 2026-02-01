@@ -44,6 +44,10 @@ func InitDB(dbPath string) *gorm.DB {
 		&models.PoolOption{},
 		&models.Bet{},
 		&models.PointsLog{},
+		&models.Market{},
+		&models.MarketOutcome{},
+		&models.SharePosition{},
+		&models.Trade{},
 	); err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}

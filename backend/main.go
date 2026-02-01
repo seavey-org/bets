@@ -24,6 +24,7 @@ func main() {
 	authService := services.NewAuthService(db, cfg)
 	groupService := services.NewGroupService(db)
 	poolService := services.NewPoolService(db)
+	marketService := services.NewMarketService(db)
 	hub := services.NewHub()
 	go hub.Run()
 
@@ -31,6 +32,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler(authService, cfg.BaseURL)
 	groupHandler := handlers.NewGroupHandler(groupService, hub)
 	poolHandler := handlers.NewPoolHandler(poolService, groupService, hub)
+	marketHandler := handlers.NewMarketHandler(marketService, hub)
 	leaderboardHandler := handlers.NewLeaderboardHandler(db)
 	wsHandler := handlers.NewWebSocketHandler(hub, authService, db)
 
@@ -87,6 +89,17 @@ func main() {
 			groupRoutes.POST("/pools/:pid/lock", poolHandler.Lock)
 			groupRoutes.POST("/pools/:pid/resolve", poolHandler.Resolve)
 			groupRoutes.POST("/pools/:pid/cancel", poolHandler.Cancel)
+
+			// Markets (prediction markets)
+			groupRoutes.POST("/markets", marketHandler.Create)
+			groupRoutes.GET("/markets", marketHandler.List)
+			groupRoutes.GET("/markets/:mid", marketHandler.Get)
+			groupRoutes.POST("/markets/:mid/buy", marketHandler.Buy)
+			groupRoutes.POST("/markets/:mid/sell", marketHandler.Sell)
+			groupRoutes.POST("/markets/:mid/resolve", marketHandler.Resolve)
+			groupRoutes.POST("/markets/:mid/cancel", marketHandler.Cancel)
+			groupRoutes.GET("/markets/:mid/trades", marketHandler.Trades)
+			groupRoutes.GET("/positions", marketHandler.Positions)
 
 			// Admin-only
 			admin := groupRoutes.Group("")
