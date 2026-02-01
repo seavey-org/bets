@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { usePoolsStore } from './pools'
 import { useGroupsStore } from './groups'
+import { useMarketsStore } from './markets'
 
 interface WSEvent {
   type: string
@@ -86,6 +87,7 @@ export const useWebSocketStore = defineStore('websocket', {
     handleEvent(event: WSEvent) {
       const poolsStore = usePoolsStore()
       const groupsStore = useGroupsStore()
+      const marketsStore = useMarketsStore()
 
       switch (event.type) {
       case 'pool_created':
@@ -93,13 +95,30 @@ export const useWebSocketStore = defineStore('websocket', {
       case 'pool_resolved':
       case 'pool_cancelled':
       case 'bet_placed':
-        // Refresh pools list
         if (this.groupId) {
           poolsStore.fetchPools(this.groupId)
-          // If viewing a specific pool, refresh it too
           if (poolsStore.activePool) {
             poolsStore.fetchPool(this.groupId, poolsStore.activePool.id)
           }
+        }
+        break
+      case 'market_created':
+      case 'market_resolved':
+      case 'market_cancelled':
+        if (this.groupId) {
+          marketsStore.fetchMarkets(this.groupId)
+          if (marketsStore.activeMarket) {
+            marketsStore.fetchMarket(this.groupId, marketsStore.activeMarket.id)
+          }
+        }
+        break
+      case 'market_trade':
+        if (this.groupId) {
+          if (marketsStore.activeMarket) {
+            marketsStore.fetchMarket(this.groupId, marketsStore.activeMarket.id)
+            marketsStore.fetchPositions(this.groupId)
+          }
+          marketsStore.fetchMarkets(this.groupId)
         }
         break
       case 'member_joined':

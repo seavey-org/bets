@@ -78,3 +78,9 @@ See `CLAUDE.md` for full deployment details and required environment variables.
 | Auth | Google OAuth 2.0 + local email/password (bcrypt) + JWT |
 | Real-time | WebSockets (gorilla/websocket) |
 | Deploy | Docker, nginx, GitHub Actions, Cloudflare |
+
+## CI/CD
+
+GitHub Actions runs on every push and PR to `main`:
+- **Backend:** tests (`go test -race`), formatting (`gofmt`), linting (`golangci-lint`)
+- **Frontend:** linting (ESLint), type checking (`vue-tsc`), production build (`vite build`)

@@ -57,6 +57,18 @@ const routes = [
     meta: { auth: true },
   },
   {
+    path: '/groups/:id/markets/new',
+    name: 'MarketCreate',
+    component: () => import('./views/MarketCreate.vue'),
+    meta: { auth: true },
+  },
+  {
+    path: '/groups/:id/markets/:mid',
+    name: 'MarketDetail',
+    component: () => import('./views/MarketDetail.vue'),
+    meta: { auth: true },
+  },
+  {
     path: '/groups/:id/leaderboard',
     name: 'Leaderboard',
     component: () => import('./views/Leaderboard.vue'),
