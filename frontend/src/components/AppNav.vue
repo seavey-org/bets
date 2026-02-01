@@ -27,7 +27,7 @@ void themeStore // used in template via ThemeToggle
             to="/"
             class="text-xl font-bold text-blue-600 dark:text-blue-400"
           >
-            LetsBet
+            Bets
           </router-link>
           <div class="hidden sm:flex gap-4">
             <router-link

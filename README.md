@@ -1,4 +1,4 @@
-# LetsBet
+# Bets
 
 Friendly betting pools for groups of friends, family, and coworkers. Create groups, invite people with a code, and run betting pools using a points-based system.
 
