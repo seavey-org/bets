@@ -25,11 +25,12 @@ See `PROJECT_STANDARDS.md` for cross-project conventions.
 backend/
 ├── main.go              # Entry point, route registration, SPA serving
 ├── config/config.go     # Env-based configuration
-├── models/              # GORM models (User, Group, GroupMember, Pool, PoolOption, Bet, PointsLog)
+├── models/              # GORM models (User, Group, GroupMember, Pool, PoolOption, Bet, PointsLog,
+│                        #   Market, MarketOutcome, SharePosition, Trade)
 ├── storage/database.go  # SQLite init with WAL mode, auto-migration, manual migrations
 ├── middleware/           # JWT auth middleware, group membership checks
-├── handlers/            # HTTP handlers (auth, groups, pools, leaderboard, websocket)
-├── services/            # Business logic (auth/JWT, group mgmt, pool resolution, WS hub)
+├── handlers/            # HTTP handlers (auth, groups, pools, markets, leaderboard, websocket)
+├── services/            # Business logic (auth/JWT, group mgmt, pool resolution, market CPMM, WS hub)
 └── .golangci.yml        # Linter config
 
 frontend/
@@ -82,6 +83,7 @@ Key test files:
 - `services/auth_test.go` - Local registration, login, duplicate email, wrong password, Google-only account rejection, JWT round-trip
 - `services/group_test.go` - Group CRUD, join, grant points, kick, invite codes, group deletion (cascade)
 - `services/pool_test.go` - Full pool lifecycle: create, bet, lock, resolve (proportional split, no winners refund), cancel
+- `services/market_test.go` - Prediction market lifecycle: create, buy/sell shares, CPMM price mechanics (sum-to-one, price movement), resolve payouts, cancel refunds, ClosesAt enforcement, permissions
 
 ## Linting
 
@@ -107,6 +109,7 @@ cd backend && gofmt -w . && goimports -local github.com/codyseavey/bets -w .
 - **Invite codes** are 8-character alphanumeric strings using an unambiguous charset (no 0/O, 1/I).
 - **Local auth** uses bcrypt for password hashing. GoogleID is nullable (`*string`) so users can exist without a Google account. A manual SQLite migration in `storage/database.go` handles the NOT NULL to nullable transition on existing databases.
 - **Group deletion** cascades to all related data (bets, pool options, pools, points logs, members) in a single transaction. Only group admins can delete.
+- **Prediction markets** use a Constant Product Market Maker (CPMM) with complete-sets formulation. Prices always sum to ~1.0 (probabilities). Buy cost rounds up, sell payout rounds down (no value leakage). Binary markets use a closed-form quadratic; n>2 markets use binary search with dynamic bounds. A `sync.Mutex` on MarketService serializes buy/sell to prevent TOCTOU races on pool shares. The `Market.Liquidity` field stores the initial seed amount (used for cancel refunds instead of log queries).
 
 ## Deployment
 

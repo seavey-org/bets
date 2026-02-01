@@ -7,8 +7,9 @@ Friendly betting pools for groups of friends, family, and coworkers. Create grou
 - **Google OAuth** or **email/password** sign-in
 - **Groups** with invite codes, configurable starting points, admin controls
 - **Betting pools** with multiple options, one bet per person per pool
+- **Prediction markets** with continuous trading via CPMM (prices reflect probabilities)
 - **Proportional payouts** when pools are resolved
-- **Points audit trail** tracking every grant, bet, win, and refund
+- **Points audit trail** tracking every grant, bet, win, trade, and refund
 - **Leaderboard** with win/loss records per group
 - **Real-time updates** via WebSockets
 - **Dark/light/system theme** toggle
@@ -47,6 +48,15 @@ Open `http://localhost:5173`. The Vite dev server proxies API requests to the Go
 5. Members place bets using their points
 6. Admin or pool creator resolves the pool by picking the winner
 7. Winners split the pot proportionally to their wagers
+
+### Prediction Markets
+
+1. Create a market with a question and 2+ outcomes (e.g. "Who wins the election?" with Alice/Bob/Charlie)
+2. The creator seeds initial liquidity (points deducted from their balance)
+3. Buy shares of outcomes you believe in (price goes up as more people buy)
+4. Sell shares to take profit or cut losses (price goes down)
+5. Prices always reflect probabilities (sum to ~1.0)
+6. On resolution: winning shares pay 1 point each, losing shares are worthless
 
 ## Deployment
 

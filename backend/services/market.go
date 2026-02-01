@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,10 @@ import (
 
 type MarketService struct {
 	db *gorm.DB
+	// tradeMu serializes buy/sell operations to prevent TOCTOU races on CPMM pool shares.
+	// SQLite serializes writes but reads can see stale data if a concurrent transaction
+	// hasn't committed yet. This mutex ensures the full read-compute-write cycle is atomic.
+	tradeMu sync.Mutex
 }
 
 func NewMarketService(db *gorm.DB) *MarketService {
@@ -30,6 +35,12 @@ type CreateMarketRequest struct {
 type TradeRequest struct {
 	OutcomeID string  `json:"outcome_id" binding:"required"`
 	Shares    float64 `json:"shares" binding:"required,gt=0"`
+}
+
+// TradeResult wraps a trade with context needed by the handler (e.g. group ID for WS broadcast).
+type TradeResult struct {
+	Trade   *models.Trade
+	GroupID string
 }
 
 // CreateMarket creates a new prediction market with CPMM liquidity pool.
@@ -99,6 +110,7 @@ func (s *MarketService) CreateMarket(groupID, userID string, req CreateMarketReq
 		Description: req.Description,
 		Status:      models.MarketStatusOpen,
 		CreatedBy:   userID,
+		Liquidity:   liquidity,
 		ClosesAt:    closesAt,
 	}
 
@@ -172,7 +184,10 @@ func (s *MarketService) GetGroupMarkets(groupID, status string) ([]models.Market
 
 // BuyShares executes a buy trade using the CPMM.
 // The user pays points to receive shares of a specific outcome.
-func (s *MarketService) BuyShares(marketID, userID string, req TradeRequest) (*models.Trade, error) {
+func (s *MarketService) BuyShares(marketID, userID string, req TradeRequest) (*TradeResult, error) {
+	s.tradeMu.Lock()
+	defer s.tradeMu.Unlock()
+
 	tx := s.db.Begin()
 
 	var market models.Market
@@ -284,11 +299,14 @@ func (s *MarketService) BuyShares(marketID, userID string, req TradeRequest) (*m
 		return nil, err
 	}
 
-	return trade, nil
+	return &TradeResult{Trade: trade, GroupID: market.GroupID}, nil
 }
 
 // SellShares executes a sell trade. User returns shares and receives points.
-func (s *MarketService) SellShares(marketID, userID string, req TradeRequest) (*models.Trade, error) {
+func (s *MarketService) SellShares(marketID, userID string, req TradeRequest) (*TradeResult, error) {
+	s.tradeMu.Lock()
+	defer s.tradeMu.Unlock()
+
 	tx := s.db.Begin()
 
 	var market models.Market
@@ -299,6 +317,10 @@ func (s *MarketService) SellShares(marketID, userID string, req TradeRequest) (*
 	if market.Status != models.MarketStatusOpen {
 		tx.Rollback()
 		return nil, fmt.Errorf("market is not open for trading")
+	}
+	if market.ClosesAt != nil && time.Now().After(*market.ClosesAt) {
+		tx.Rollback()
+		return nil, fmt.Errorf("market has closed for trading")
 	}
 
 	// Find target outcome
@@ -394,40 +416,41 @@ func (s *MarketService) SellShares(marketID, userID string, req TradeRequest) (*
 		return nil, err
 	}
 
-	return trade, nil
+	return &TradeResult{Trade: trade, GroupID: market.GroupID}, nil
 }
 
 // ResolveMarket resolves a market by declaring the winning outcome.
 // Holders of winning shares receive 1 point per share. Losing shares are worthless.
-func (s *MarketService) ResolveMarket(marketID, winningOutcomeID, userID string, isAdmin bool) error {
+// Returns the group ID for WS broadcast.
+func (s *MarketService) ResolveMarket(marketID, winningOutcomeID, userID string, isAdmin bool) (string, error) {
 	tx := s.db.Begin()
 
 	var market models.Market
 	if err := tx.First(&market, "id = ?", marketID).Error; err != nil {
 		tx.Rollback()
-		return fmt.Errorf("market not found")
+		return "", fmt.Errorf("market not found")
 	}
 	if market.Status != models.MarketStatusOpen && market.Status != models.MarketStatusClosed {
 		tx.Rollback()
-		return fmt.Errorf("market cannot be resolved (status: %s)", market.Status)
+		return "", fmt.Errorf("market cannot be resolved (status: %s)", market.Status)
 	}
 	if market.CreatedBy != userID && !isAdmin {
 		tx.Rollback()
-		return fmt.Errorf("only market creator or group admin can resolve")
+		return "", fmt.Errorf("only market creator or group admin can resolve")
 	}
 
 	// Verify winning outcome
 	var outcome models.MarketOutcome
 	if err := tx.First(&outcome, "id = ? AND market_id = ?", winningOutcomeID, marketID).Error; err != nil {
 		tx.Rollback()
-		return fmt.Errorf("invalid winning outcome")
+		return "", fmt.Errorf("invalid winning outcome")
 	}
 
 	// Pay out winning share holders: 1 point per share
 	var winningPositions []models.SharePosition
 	if err := tx.Where("market_id = ? AND outcome_id = ? AND shares > 0", marketID, winningOutcomeID).Find(&winningPositions).Error; err != nil {
 		tx.Rollback()
-		return err
+		return "", err
 	}
 
 	for _, pos := range winningPositions {
@@ -441,7 +464,7 @@ func (s *MarketService) ResolveMarket(marketID, winningOutcomeID, userID string,
 			Update("points_balance", gorm.Expr("points_balance + ?", payout))
 		if result.Error != nil {
 			tx.Rollback()
-			return result.Error
+			return "", result.Error
 		}
 
 		logEntry := &models.PointsLog{
@@ -455,7 +478,7 @@ func (s *MarketService) ResolveMarket(marketID, winningOutcomeID, userID string,
 		}
 		if err := tx.Create(logEntry).Error; err != nil {
 			tx.Rollback()
-			return err
+			return "", err
 		}
 	}
 
@@ -466,28 +489,29 @@ func (s *MarketService) ResolveMarket(marketID, winningOutcomeID, userID string,
 		"resolved_at":        now,
 	}).Error; err != nil {
 		tx.Rollback()
-		return err
+		return "", err
 	}
 
-	return tx.Commit().Error
+	return market.GroupID, tx.Commit().Error
 }
 
 // CancelMarket cancels a market and refunds all traders based on their net spend.
-func (s *MarketService) CancelMarket(marketID, userID string, isAdmin bool) error {
+// Returns the group ID for WS broadcast.
+func (s *MarketService) CancelMarket(marketID, userID string, isAdmin bool) (string, error) {
 	tx := s.db.Begin()
 
 	var market models.Market
 	if err := tx.First(&market, "id = ?", marketID).Error; err != nil {
 		tx.Rollback()
-		return fmt.Errorf("market not found")
+		return "", fmt.Errorf("market not found")
 	}
 	if market.Status == models.MarketStatusResolved || market.Status == models.MarketStatusCancelled {
 		tx.Rollback()
-		return fmt.Errorf("market is already %s", market.Status)
+		return "", fmt.Errorf("market is already %s", market.Status)
 	}
 	if market.CreatedBy != userID && !isAdmin {
 		tx.Rollback()
-		return fmt.Errorf("only market creator or group admin can cancel")
+		return "", fmt.Errorf("only market creator or group admin can cancel")
 	}
 
 	// Refund each user their net spend (sum of all trade costs)
@@ -502,7 +526,7 @@ func (s *MarketService) CancelMarket(marketID, userID string, isAdmin bool) erro
 		Group("user_id").
 		Find(&refunds).Error; err != nil {
 		tx.Rollback()
-		return err
+		return "", err
 	}
 
 	for _, r := range refunds {
@@ -514,7 +538,7 @@ func (s *MarketService) CancelMarket(marketID, userID string, isAdmin bool) erro
 			Update("points_balance", gorm.Expr("points_balance + ?", r.NetSpend))
 		if result.Error != nil {
 			tx.Rollback()
-			return result.Error
+			return "", result.Error
 		}
 
 		logEntry := &models.PointsLog{
@@ -528,37 +552,40 @@ func (s *MarketService) CancelMarket(marketID, userID string, isAdmin bool) erro
 		}
 		if err := tx.Create(logEntry).Error; err != nil {
 			tx.Rollback()
-			return err
+			return "", err
 		}
 	}
 
-	// Also refund creator's initial liquidity
-	var liquidityLog models.PointsLog
-	if err := tx.Where("reference_id = ? AND type = ? AND note LIKE ?", marketID, models.PointsLogMarketBuy, "Seeded market liquidity%").First(&liquidityLog).Error; err == nil {
-		refundAmt := -liquidityLog.Amount // Was stored as negative
-		if refundAmt > 0 {
-			tx.Model(&models.GroupMember{}).
-				Where("group_id = ? AND user_id = ?", market.GroupID, market.CreatedBy).
-				Update("points_balance", gorm.Expr("points_balance + ?", refundAmt))
+	// Refund creator's initial liquidity
+	if market.Liquidity > 0 {
+		result := tx.Model(&models.GroupMember{}).
+			Where("group_id = ? AND user_id = ?", market.GroupID, market.CreatedBy).
+			Update("points_balance", gorm.Expr("points_balance + ?", market.Liquidity))
+		if result.Error != nil {
+			tx.Rollback()
+			return "", fmt.Errorf("failed to refund liquidity: %w", result.Error)
+		}
 
-			tx.Create(&models.PointsLog{
-				ID:          uuid.New().String(),
-				GroupID:     market.GroupID,
-				UserID:      market.CreatedBy,
-				Amount:      refundAmt,
-				Type:        models.PointsLogMarketRefund,
-				ReferenceID: marketID,
-				Note:        fmt.Sprintf("Liquidity refund from cancelled market \"%s\"", market.Title),
-			})
+		if err := tx.Create(&models.PointsLog{
+			ID:          uuid.New().String(),
+			GroupID:     market.GroupID,
+			UserID:      market.CreatedBy,
+			Amount:      market.Liquidity,
+			Type:        models.PointsLogMarketRefund,
+			ReferenceID: marketID,
+			Note:        fmt.Sprintf("Liquidity refund from cancelled market \"%s\"", market.Title),
+		}).Error; err != nil {
+			tx.Rollback()
+			return "", fmt.Errorf("failed to log liquidity refund: %w", err)
 		}
 	}
 
 	if err := tx.Model(&market).Update("status", models.MarketStatusCancelled).Error; err != nil {
 		tx.Rollback()
-		return err
+		return "", err
 	}
 
-	return tx.Commit().Error
+	return market.GroupID, tx.Commit().Error
 }
 
 // GetUserPositions returns all share positions for a user in a group.
@@ -581,15 +608,6 @@ func (s *MarketService) GetMarketTrades(marketID string) ([]models.Trade, error)
 		Order("created_at DESC").
 		Find(&trades).Error
 	return trades, err
-}
-
-// GetMarketGroupID returns the group ID for a market.
-func (s *MarketService) GetMarketGroupID(marketID string) (string, error) {
-	var market models.Market
-	if err := s.db.Select("group_id").First(&market, "id = ?", marketID).Error; err != nil {
-		return "", err
-	}
-	return market.GroupID, nil
 }
 
 // --- CPMM Math ---
@@ -647,8 +665,15 @@ func (s *MarketService) costViaCompleteSets(outcomes []models.MarketOutcome, tar
 		k *= o.Shares
 	}
 
+	// Upper bound: in the worst case, cost approaches shares * (max pool share / min pool share).
+	// Use sum of all shares as a safe generous bound.
+	hi := 0.0
+	for _, o := range outcomes {
+		hi += o.Shares
+	}
+	hi += shares // Ensure bound covers the requested share count
 	// Binary search for C where product(q_i + C + delta_i) = k
-	lo, hi := 0.0, 10000.0
+	lo := 0.0
 	for iter := 0; iter < 100; iter++ {
 		mid := (lo + hi) / 2
 		prod := 1.0
@@ -719,10 +744,15 @@ func (s *MarketService) calculateSellPayout(outcomes []models.MarketOutcome, tar
 
 	// For n > 2: binary search
 	k := 1.0
+	minShares := math.MaxFloat64
 	for _, o := range outcomes {
 		k *= o.Shares
+		if o.Shares < minShares {
+			minShares = o.Shares
+		}
 	}
-	lo, hi := 0.0, 10000.0
+	// Payout can't exceed the smallest pool (we'd drain it), so use that as upper bound
+	lo, hi := 0.0, minShares
 	for iter := 0; iter < 100; iter++ {
 		mid := (lo + hi) / 2
 		prod := 1.0

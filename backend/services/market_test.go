@@ -3,6 +3,7 @@ package services
 import (
 	"math"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -163,13 +164,14 @@ func TestBuyShares(t *testing.T) {
 	yesOutcome := market.Outcomes[0]
 	balanceBefore := getBalance(t, db, group.ID, alice.ID)
 
-	trade, err := marketSvc.BuyShares(market.ID, alice.ID, TradeRequest{
+	result, err := marketSvc.BuyShares(market.ID, alice.ID, TradeRequest{
 		OutcomeID: yesOutcome.ID,
 		Shares:    10,
 	})
 	if err != nil {
 		t.Fatalf("BuyShares failed: %v", err)
 	}
+	trade := result.Trade
 
 	if trade.Side != "buy" {
 		t.Errorf("expected side 'buy', got '%s'", trade.Side)
@@ -265,13 +267,14 @@ func TestSellShares(t *testing.T) {
 	balanceBefore := getBalance(t, db, group.ID, alice.ID)
 
 	// Sell them back
-	trade, err := marketSvc.SellShares(market.ID, alice.ID, TradeRequest{
+	sellResult, err := marketSvc.SellShares(market.ID, alice.ID, TradeRequest{
 		OutcomeID: yesOutcome.ID,
 		Shares:    5,
 	})
 	if err != nil {
 		t.Fatalf("SellShares failed: %v", err)
 	}
+	trade := sellResult.Trade
 
 	if trade.Side != "sell" {
 		t.Errorf("expected side 'sell', got '%s'", trade.Side)
@@ -441,7 +444,7 @@ func TestResolveMarket_WinnersGetPaid(t *testing.T) {
 	bobBefore := getBalance(t, db, group.ID, bob.ID)
 
 	// Resolve: Yes wins
-	if err := marketSvc.ResolveMarket(market.ID, yesOutcome.ID, alice.ID, false); err != nil {
+	if _, err := marketSvc.ResolveMarket(market.ID, yesOutcome.ID, alice.ID, false); err != nil {
 		t.Fatalf("ResolveMarket failed: %v", err)
 	}
 
@@ -476,13 +479,13 @@ func TestResolveMarket_Permissions(t *testing.T) {
 	})
 
 	// Bob (non-creator, non-admin) can't resolve
-	err := marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, bob.ID, false)
+	_, err := marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, bob.ID, false)
 	if err == nil {
 		t.Error("expected permission error for non-creator resolve")
 	}
 
 	// Bob as admin can
-	err = marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, bob.ID, true)
+	_, err = marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, bob.ID, true)
 	if err != nil {
 		t.Errorf("admin should be able to resolve: %v", err)
 	}
@@ -496,9 +499,9 @@ func TestResolveMarket_AlreadyResolved(t *testing.T) {
 		Outcomes: []string{"Yes", "No"},
 	})
 
-	marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, alice.ID, false)
+	marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, alice.ID, false) //nolint:errcheck
 
-	err := marketSvc.ResolveMarket(market.ID, market.Outcomes[1].ID, alice.ID, false)
+	_, err := marketSvc.ResolveMarket(market.ID, market.Outcomes[1].ID, alice.ID, false)
 	if err == nil {
 		t.Error("expected error resolving already-resolved market")
 	}
@@ -512,7 +515,7 @@ func TestResolveMarket_InvalidOutcome(t *testing.T) {
 		Outcomes: []string{"Yes", "No"},
 	})
 
-	err := marketSvc.ResolveMarket(market.ID, "nonexistent-id", alice.ID, false)
+	_, err := marketSvc.ResolveMarket(market.ID, "nonexistent-id", alice.ID, false)
 	if err == nil {
 		t.Error("expected error for invalid winning outcome")
 	}
@@ -542,7 +545,7 @@ func TestCancelMarket_RefundsTraders(t *testing.T) {
 	aliceBefore := getBalance(t, db, group.ID, alice.ID)
 	bobBefore := getBalance(t, db, group.ID, bob.ID)
 
-	if err := marketSvc.CancelMarket(market.ID, alice.ID, false); err != nil {
+	if _, err := marketSvc.CancelMarket(market.ID, alice.ID, false); err != nil {
 		t.Fatalf("CancelMarket failed: %v", err)
 	}
 
@@ -572,9 +575,9 @@ func TestCancelMarket_AlreadyResolved(t *testing.T) {
 		Outcomes: []string{"Yes", "No"},
 	})
 
-	marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, alice.ID, false)
+	marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, alice.ID, false) //nolint:errcheck
 
-	err := marketSvc.CancelMarket(market.ID, alice.ID, true)
+	_, err := marketSvc.CancelMarket(market.ID, alice.ID, true)
 	if err == nil {
 		t.Error("expected error cancelling resolved market")
 	}
@@ -588,7 +591,7 @@ func TestCancelMarket_Permissions(t *testing.T) {
 		Outcomes: []string{"Yes", "No"},
 	})
 
-	err := marketSvc.CancelMarket(market.ID, bob.ID, false)
+	_, err := marketSvc.CancelMarket(market.ID, bob.ID, false)
 	if err == nil {
 		t.Error("expected permission error for non-creator cancel")
 	}
@@ -606,13 +609,13 @@ func TestBuyThenSell_RoundTrip(t *testing.T) {
 	balanceStart := getBalance(t, db, group.ID, alice.ID)
 
 	// Buy 10 shares
-	buyTrade, _ := marketSvc.BuyShares(market.ID, alice.ID, TradeRequest{
+	buyResult, _ := marketSvc.BuyShares(market.ID, alice.ID, TradeRequest{
 		OutcomeID: market.Outcomes[0].ID,
 		Shares:    10,
 	})
 
 	// Sell 10 shares back
-	sellTrade, err := marketSvc.SellShares(market.ID, alice.ID, TradeRequest{
+	sellResult, err := marketSvc.SellShares(market.ID, alice.ID, TradeRequest{
 		OutcomeID: market.Outcomes[0].ID,
 		Shares:    10,
 	})
@@ -628,7 +631,7 @@ func TestBuyThenSell_RoundTrip(t *testing.T) {
 		t.Errorf("user should not profit from round trip, gained %d pts", -loss)
 	}
 	if loss > 3 {
-		t.Errorf("round trip loss too large: %d pts (buy cost %d, sell payout %d)", loss, buyTrade.PointsCost, -sellTrade.PointsCost)
+		t.Errorf("round trip loss too large: %d pts (buy cost %d, sell payout %d)", loss, buyResult.Trade.PointsCost, -sellResult.Trade.PointsCost)
 	}
 }
 
@@ -715,7 +718,7 @@ func TestMultipleUsersTrading(t *testing.T) {
 	marketSvc.BuyShares(market.ID, charlie.ID, TradeRequest{OutcomeID: market.Outcomes[0].ID, Shares: 8})
 
 	// Resolve: Red wins
-	marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, alice.ID, true)
+	marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, alice.ID, true) //nolint:errcheck
 
 	// Alice and Charlie should get payouts (1pt per share)
 	aliceBalance := getBalance(t, db, group.ID, alice.ID)
@@ -737,5 +740,176 @@ func TestMultipleUsersTrading(t *testing.T) {
 	trades, _ := marketSvc.GetMarketTrades(market.ID)
 	if len(trades) != 3 {
 		t.Errorf("expected 3 trades, got %d", len(trades))
+	}
+}
+
+func TestSellShares_AfterClosesAt(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	// Create a market that closes in the past (we'll set it directly in DB)
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "ClosesAt sell test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 100,
+	})
+
+	// Buy shares while market is open
+	marketSvc.BuyShares(market.ID, alice.ID, TradeRequest{
+		OutcomeID: market.Outcomes[0].ID,
+		Shares:    5,
+	})
+
+	// Set ClosesAt to the past
+	pastTime := time.Now().Add(-1 * time.Hour)
+	marketSvc.db.Model(&models.Market{}).Where("id = ?", market.ID).Update("closes_at", pastTime)
+
+	// Sell should fail because market has closed
+	_, err := marketSvc.SellShares(market.ID, alice.ID, TradeRequest{
+		OutcomeID: market.Outcomes[0].ID,
+		Shares:    5,
+	})
+	if err == nil {
+		t.Error("expected error selling after ClosesAt")
+	}
+}
+
+func TestBuyShares_AfterClosesAt(t *testing.T) {
+	_, marketSvc, _, group, alice, bob := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "ClosesAt buy test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 100,
+	})
+
+	// Set ClosesAt to the past
+	pastTime := time.Now().Add(-1 * time.Hour)
+	marketSvc.db.Model(&models.Market{}).Where("id = ?", market.ID).Update("closes_at", pastTime)
+
+	// Buy should fail
+	_, err := marketSvc.BuyShares(market.ID, bob.ID, TradeRequest{
+		OutcomeID: market.Outcomes[0].ID,
+		Shares:    5,
+	})
+	if err == nil {
+		t.Error("expected error buying after ClosesAt")
+	}
+}
+
+func TestCreateMarket_LiquidityFieldStored(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, err := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "Liquidity field test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 200,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarket failed: %v", err)
+	}
+
+	if market.Liquidity != 200 {
+		t.Errorf("expected Liquidity 200, got %d", market.Liquidity)
+	}
+
+	// Reload from DB to verify persistence
+	loaded, _ := marketSvc.GetMarket(market.ID)
+	if loaded.Liquidity != 200 {
+		t.Errorf("expected persisted Liquidity 200, got %d", loaded.Liquidity)
+	}
+}
+
+func TestCancelMarket_RefundsLiquidity(t *testing.T) {
+	db, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	balanceBefore := getBalance(t, db, group.ID, alice.ID)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "Liquidity refund test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 150,
+	})
+
+	afterCreate := getBalance(t, db, group.ID, alice.ID)
+	if afterCreate != balanceBefore-150 {
+		t.Errorf("expected balance %d after create, got %d", balanceBefore-150, afterCreate)
+	}
+
+	// Cancel with no trades, should get full liquidity back
+	if _, err := marketSvc.CancelMarket(market.ID, alice.ID, false); err != nil {
+		t.Fatalf("CancelMarket failed: %v", err)
+	}
+
+	afterCancel := getBalance(t, db, group.ID, alice.ID)
+	if afterCancel != balanceBefore {
+		t.Errorf("expected full refund to %d, got %d", balanceBefore, afterCancel)
+	}
+}
+
+func TestTradeResult_ContainsGroupID(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "GroupID test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 100,
+	})
+
+	result, err := marketSvc.BuyShares(market.ID, alice.ID, TradeRequest{
+		OutcomeID: market.Outcomes[0].ID,
+		Shares:    5,
+	})
+	if err != nil {
+		t.Fatalf("BuyShares failed: %v", err)
+	}
+
+	if result.GroupID != group.ID {
+		t.Errorf("expected GroupID %s, got %s", group.ID, result.GroupID)
+	}
+
+	sellResult, err := marketSvc.SellShares(market.ID, alice.ID, TradeRequest{
+		OutcomeID: market.Outcomes[0].ID,
+		Shares:    3,
+	})
+	if err != nil {
+		t.Fatalf("SellShares failed: %v", err)
+	}
+
+	if sellResult.GroupID != group.ID {
+		t.Errorf("expected GroupID %s, got %s", group.ID, sellResult.GroupID)
+	}
+}
+
+func TestResolveMarket_ReturnsGroupID(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:    "Resolve GroupID test",
+		Outcomes: []string{"Yes", "No"},
+	})
+
+	groupID, err := marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, alice.ID, false)
+	if err != nil {
+		t.Fatalf("ResolveMarket failed: %v", err)
+	}
+	if groupID != group.ID {
+		t.Errorf("expected GroupID %s, got %s", group.ID, groupID)
+	}
+}
+
+func TestCancelMarket_ReturnsGroupID(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:    "Cancel GroupID test",
+		Outcomes: []string{"Yes", "No"},
+	})
+
+	groupID, err := marketSvc.CancelMarket(market.ID, alice.ID, false)
+	if err != nil {
+		t.Fatalf("CancelMarket failed: %v", err)
+	}
+	if groupID != group.ID {
+		t.Errorf("expected GroupID %s, got %s", group.ID, groupID)
 	}
 }

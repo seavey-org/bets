@@ -78,22 +78,21 @@ func (h *MarketHandler) Buy(c *gin.Context) {
 	marketID := c.Param("mid")
 	userID := middleware.GetUserID(c)
 
-	trade, err := h.marketService.BuyShares(marketID, userID, req)
+	result, err := h.marketService.BuyShares(marketID, userID, req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	groupID, _ := h.marketService.GetMarketGroupID(marketID)
-	h.hub.BroadcastToGroup(groupID, services.WSEvent{
+	h.hub.BroadcastToGroup(result.GroupID, services.WSEvent{
 		Type: "market_trade",
 		Payload: gin.H{
 			"market_id": marketID,
-			"trade":     trade,
+			"trade":     result.Trade,
 		},
 	})
 
-	c.JSON(http.StatusCreated, trade)
+	c.JSON(http.StatusCreated, result.Trade)
 }
 
 func (h *MarketHandler) Sell(c *gin.Context) {
@@ -106,22 +105,21 @@ func (h *MarketHandler) Sell(c *gin.Context) {
 	marketID := c.Param("mid")
 	userID := middleware.GetUserID(c)
 
-	trade, err := h.marketService.SellShares(marketID, userID, req)
+	result, err := h.marketService.SellShares(marketID, userID, req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	groupID, _ := h.marketService.GetMarketGroupID(marketID)
-	h.hub.BroadcastToGroup(groupID, services.WSEvent{
+	h.hub.BroadcastToGroup(result.GroupID, services.WSEvent{
 		Type: "market_trade",
 		Payload: gin.H{
 			"market_id": marketID,
-			"trade":     trade,
+			"trade":     result.Trade,
 		},
 	})
 
-	c.JSON(http.StatusCreated, trade)
+	c.JSON(http.StatusCreated, result.Trade)
 }
 
 type ResolveMarketRequest struct {
@@ -140,13 +138,13 @@ func (h *MarketHandler) Resolve(c *gin.Context) {
 	member := middleware.GetGroupMember(c)
 	isAdmin := member != nil && member.Role == "admin"
 
-	if err := h.marketService.ResolveMarket(marketID, req.WinningOutcomeID, userID, isAdmin); err != nil {
+	groupID, err := h.marketService.ResolveMarket(marketID, req.WinningOutcomeID, userID, isAdmin)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	market, _ := h.marketService.GetMarket(marketID)
-	groupID, _ := h.marketService.GetMarketGroupID(marketID)
 	h.hub.BroadcastToGroup(groupID, services.WSEvent{
 		Type:    "market_resolved",
 		Payload: market,
@@ -161,12 +159,12 @@ func (h *MarketHandler) Cancel(c *gin.Context) {
 	member := middleware.GetGroupMember(c)
 	isAdmin := member != nil && member.Role == "admin"
 
-	if err := h.marketService.CancelMarket(marketID, userID, isAdmin); err != nil {
+	groupID, err := h.marketService.CancelMarket(marketID, userID, isAdmin)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	groupID, _ := h.marketService.GetMarketGroupID(marketID)
 	h.hub.BroadcastToGroup(groupID, services.WSEvent{
 		Type:    "market_cancelled",
 		Payload: gin.H{"market_id": marketID},

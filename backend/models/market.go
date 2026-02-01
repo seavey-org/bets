@@ -26,6 +26,7 @@ type Market struct {
 	Description      string          `json:"description" gorm:"type:text"`
 	Status           MarketStatus    `json:"status" gorm:"type:text;not null;default:open"`
 	CreatedBy        string          `json:"created_by" gorm:"type:text;not null"`
+	Liquidity        int             `json:"liquidity" gorm:"not null;default:100"`
 	WinningOutcomeID string          `json:"winning_outcome_id,omitempty" gorm:"type:text"`
 	ResolvedAt       *time.Time      `json:"resolved_at"`
 	ClosesAt         *time.Time      `json:"closes_at"` // Optional auto-close time
