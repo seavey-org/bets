@@ -205,7 +205,7 @@ func TestBuyShares(t *testing.T) {
 }
 
 func TestBuyShares_InsufficientPoints(t *testing.T) {
-	_, marketSvc, _, group, _, bob := setupMarketTest(t)
+	db, marketSvc, _, group, _, bob := setupMarketTest(t)
 
 	market, _ := marketSvc.CreateMarket(group.ID, bob.ID, CreateMarketRequest{
 		Title:     "Buy test",
@@ -213,10 +213,12 @@ func TestBuyShares_InsufficientPoints(t *testing.T) {
 		Liquidity: 100,
 	})
 
-	// Bob has 900 pts left. Try to buy way too many shares (which would cost more than 900).
+	// Set Bob's balance very low so any meaningful trade fails
+	db.Model(&models.GroupMember{}).Where("group_id = ? AND user_id = ?", group.ID, bob.ID).Update("points_balance", 1)
+
 	_, err := marketSvc.BuyShares(market.ID, bob.ID, TradeRequest{
 		OutcomeID: market.Outcomes[0].ID,
-		Shares:    99, // Almost all liquidity, extremely expensive
+		Shares:    50,
 	})
 	if err == nil {
 		t.Error("expected insufficient points error")

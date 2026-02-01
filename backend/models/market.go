@@ -5,9 +5,9 @@ import "time"
 type MarketStatus string
 
 const (
-	MarketStatusOpen     MarketStatus = "open"
-	MarketStatusClosed   MarketStatus = "closed"
-	MarketStatusResolved MarketStatus = "resolved"
+	MarketStatusOpen      MarketStatus = "open"
+	MarketStatusClosed    MarketStatus = "closed"
+	MarketStatusResolved  MarketStatus = "resolved"
 	MarketStatusCancelled MarketStatus = "cancelled"
 )
 
@@ -54,28 +54,28 @@ type MarketOutcome struct {
 
 // SharePosition tracks how many shares a user holds for a specific outcome.
 type SharePosition struct {
-	ID        string    `json:"id" gorm:"primaryKey;type:text"`
-	MarketID  string    `json:"market_id" gorm:"uniqueIndex:idx_market_user_outcome;type:text;not null"`
-	UserID    string    `json:"user_id" gorm:"uniqueIndex:idx_market_user_outcome;type:text;not null"`
-	OutcomeID string    `json:"outcome_id" gorm:"uniqueIndex:idx_market_user_outcome;type:text;not null"`
-	Shares    float64   `json:"shares" gorm:"not null;default:0"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	User      User      `json:"user,omitempty" gorm:"foreignKey:UserID"`
+	ID        string        `json:"id" gorm:"primaryKey;type:text"`
+	MarketID  string        `json:"market_id" gorm:"uniqueIndex:idx_market_user_outcome;type:text;not null"`
+	UserID    string        `json:"user_id" gorm:"uniqueIndex:idx_market_user_outcome;type:text;not null"`
+	OutcomeID string        `json:"outcome_id" gorm:"uniqueIndex:idx_market_user_outcome;type:text;not null"`
+	Shares    float64       `json:"shares" gorm:"not null;default:0"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	User      User          `json:"user,omitempty" gorm:"foreignKey:UserID"`
 	Outcome   MarketOutcome `json:"outcome,omitempty" gorm:"foreignKey:OutcomeID"`
 }
 
 // Trade records a buy or sell transaction.
 type Trade struct {
-	ID         string    `json:"id" gorm:"primaryKey;type:text"`
-	MarketID   string    `json:"market_id" gorm:"index;type:text;not null"`
-	UserID     string    `json:"user_id" gorm:"index;type:text;not null"`
-	OutcomeID  string    `json:"outcome_id" gorm:"type:text;not null"`
-	Side       string    `json:"side" gorm:"type:text;not null"` // "buy" or "sell"
-	Shares     float64   `json:"shares" gorm:"not null"`
-	PointsCost int       `json:"points_cost" gorm:"not null"` // Positive for buys, negative for sells
-	Price      float64   `json:"price" gorm:"not null"`       // Price per share at time of trade
-	CreatedAt  time.Time `json:"created_at"`
-	User       User      `json:"user,omitempty" gorm:"foreignKey:UserID"`
+	ID         string        `json:"id" gorm:"primaryKey;type:text"`
+	MarketID   string        `json:"market_id" gorm:"index;type:text;not null"`
+	UserID     string        `json:"user_id" gorm:"index;type:text;not null"`
+	OutcomeID  string        `json:"outcome_id" gorm:"type:text;not null"`
+	Side       string        `json:"side" gorm:"type:text;not null"` // "buy" or "sell"
+	Shares     float64       `json:"shares" gorm:"not null"`
+	PointsCost int           `json:"points_cost" gorm:"not null"` // Positive for buys, negative for sells
+	Price      float64       `json:"price" gorm:"not null"`       // Price per share at time of trade
+	CreatedAt  time.Time     `json:"created_at"`
+	User       User          `json:"user,omitempty" gorm:"foreignKey:UserID"`
 	Outcome    MarketOutcome `json:"outcome,omitempty" gorm:"foreignKey:OutcomeID"`
 }

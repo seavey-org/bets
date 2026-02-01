@@ -492,8 +492,8 @@ func (s *MarketService) CancelMarket(marketID, userID string, isAdmin bool) erro
 
 	// Refund each user their net spend (sum of all trade costs)
 	type UserRefund struct {
-		UserID    string
-		NetSpend  int
+		UserID   string
+		NetSpend int
 	}
 	var refunds []UserRefund
 	if err := tx.Model(&models.Trade{}).
@@ -613,7 +613,7 @@ func (s *MarketService) calculateBuyCost(outcomes []models.MarketOutcome, target
 // For n outcomes: product_i(q_i + C + delta_i) = k, where delta_i = -s for target, 0 otherwise.
 func (s *MarketService) costViaCompleteSets(outcomes []models.MarketOutcome, targetIdx int, shares float64) float64 {
 	n := len(outcomes)
-	
+
 	if n == 2 {
 		// Binary market: solve quadratic
 		// (target + C - shares)(other + C) = target * other
@@ -624,29 +624,29 @@ func (s *MarketService) costViaCompleteSets(outcomes []models.MarketOutcome, tar
 		} else {
 			other = outcomes[0].Shares
 		}
-		
+
 		A := 1.0
 		B := (outcomes[0].Shares + outcomes[1].Shares - shares)
 		C := -shares * other
-		
+
 		discriminant := B*B - 4*A*C
 		if discriminant < 0 {
 			return math.MaxFloat64
 		}
-		
+
 		cost := (-B + math.Sqrt(discriminant)) / (2 * A)
 		if cost < 0 {
 			return math.MaxFloat64
 		}
 		return cost
 	}
-	
+
 	// For n > 2: use numerical method (binary search)
 	k := 1.0
 	for _, o := range outcomes {
 		k *= o.Shares
 	}
-	
+
 	// Binary search for C where product(q_i + C + delta_i) = k
 	lo, hi := 0.0, 10000.0
 	for iter := 0; iter < 100; iter++ {
@@ -665,7 +665,7 @@ func (s *MarketService) costViaCompleteSets(outcomes []models.MarketOutcome, tar
 			hi = mid
 		}
 	}
-	
+
 	return (lo + hi) / 2
 }
 
@@ -673,14 +673,14 @@ func (s *MarketService) costViaCompleteSets(outcomes []models.MarketOutcome, tar
 // This is the reverse of buying: user returns shares to pool, receives points.
 func (s *MarketService) calculateSellPayout(outcomes []models.MarketOutcome, targetIdx int, shares float64) float64 {
 	n := len(outcomes)
-	
+
 	if n == 2 {
 		// Selling s shares of target: user puts s back, extracts C complete sets.
 		// After: (target + shares - C) * (other - C) = k
 		// For selling: target gets +shares, all pools get -C (removing complete sets)
 		a := outcomes[0].Shares
 		b := outcomes[1].Shares
-		
+
 		var target, other float64
 		if targetIdx == 0 {
 			target = a
@@ -689,23 +689,23 @@ func (s *MarketService) calculateSellPayout(outcomes []models.MarketOutcome, tar
 			target = b
 			other = a
 		}
-		
+
 		// (target + shares - C)(other - C) = k = target * other
 		// C^2 - C*(target + shares + other) + (target + shares)*other - target*other = 0
 		// C^2 - C*(target + shares + other) + shares*other = 0
 		A := 1.0
 		B := -(target + shares + other)
 		C_coeff := shares * other
-		
+
 		discriminant := B*B - 4*A*C_coeff
 		if discriminant < 0 {
 			return 0
 		}
-		
+
 		// We want the smaller positive root
 		root1 := (-B - math.Sqrt(discriminant)) / (2 * A)
 		root2 := (-B + math.Sqrt(discriminant)) / (2 * A)
-		
+
 		// Take the smaller positive root (payout shouldn't exceed pool)
 		payout := root1
 		if payout <= 0 {
@@ -716,7 +716,7 @@ func (s *MarketService) calculateSellPayout(outcomes []models.MarketOutcome, tar
 		}
 		return payout
 	}
-	
+
 	// For n > 2: binary search
 	k := 1.0
 	for _, o := range outcomes {
@@ -743,7 +743,7 @@ func (s *MarketService) calculateSellPayout(outcomes []models.MarketOutcome, tar
 			hi = mid
 		}
 	}
-	
+
 	return (lo + hi) / 2
 }
 
@@ -797,7 +797,7 @@ func (s *MarketService) populateStats(market *models.Market) {
 func (s *MarketService) addSharePosition(tx *gorm.DB, marketID, userID, outcomeID string, shares float64) error {
 	var position models.SharePosition
 	err := tx.Where("market_id = ? AND user_id = ? AND outcome_id = ?", marketID, userID, outcomeID).First(&position).Error
-	
+
 	if err == gorm.ErrRecordNotFound {
 		if shares < 0 {
 			return fmt.Errorf("cannot have negative share position")
