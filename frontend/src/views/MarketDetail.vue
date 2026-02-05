@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { useMarketsStore } from '../stores/markets'
+import { useMarketsStore, type Quote } from '../stores/markets'
 import { useGroupsStore } from '../stores/groups'
 import { useAuthStore } from '../stores/auth'
 import { formatPoints, timeAgo, formatDateTime } from '../utils/format'
@@ -22,6 +22,59 @@ const tradeError = ref('')
 const adminError = ref('')
 const submitting = ref(false)
 const showTrades = ref(false)
+
+// Quote preview state
+const quote = ref<Quote | null>(null)
+const quoteLoading = ref(false)
+const quoteError = ref('')
+let quoteDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+// Watch trade inputs and fetch quote with debounce
+watch(
+  [tradeOutcomeId, tradeShares, tradeMode],
+  () => {
+    // Clear previous quote
+    quote.value = null
+    quoteError.value = ''
+
+    // Cancel pending request
+    if (quoteDebounceTimer) {
+      clearTimeout(quoteDebounceTimer)
+    }
+
+    // Don't fetch if inputs are invalid
+    if (!tradeOutcomeId.value || tradeShares.value <= 0) {
+      return
+    }
+
+    // Debounce the API call
+    quoteDebounceTimer = setTimeout(async () => {
+      quoteLoading.value = true
+      try {
+        quote.value = await marketsStore.getQuote(
+          groupId,
+          marketId,
+          tradeOutcomeId.value,
+          tradeShares.value,
+          tradeMode.value
+        )
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { error?: string } } }
+        quoteError.value = err.response?.data?.error || 'Failed to get quote'
+      } finally {
+        quoteLoading.value = false
+      }
+    }, 300)
+  },
+  { immediate: true }
+)
+
+// Clean up debounce timer on unmount to prevent state updates on unmounted component
+onUnmounted(() => {
+  if (quoteDebounceTimer) {
+    clearTimeout(quoteDebounceTimer)
+  }
+})
 
 onMounted(async () => {
   // Clear stale trades from a previously viewed market
@@ -289,6 +342,59 @@ async function toggleTrades() {
             class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white"
           >
         </div>
+
+        <!-- Quote preview -->
+        <div
+          v-if="quoteLoading"
+          class="text-sm text-gray-500 dark:text-gray-400 py-2"
+        >
+          Calculating...
+        </div>
+        <div
+          v-else-if="quote"
+          class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 space-y-1"
+        >
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600 dark:text-gray-300">
+              {{ tradeMode === 'buy' ? 'Cost' : 'Payout' }}:
+            </span>
+            <span class="font-semibold" :class="tradeMode === 'buy' ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'">
+              {{ tradeMode === 'buy' ? '-' : '+' }}{{ formatPoints(tradeMode === 'buy' ? quote.cost! : quote.payout!) }} pts
+            </span>
+          </div>
+          <div class="flex justify-between text-sm text-gray-500 dark:text-gray-400">
+            <span>Avg price:</span>
+            <span>{{ (quote.avg_price * 100).toFixed(1) }}% per share</span>
+          </div>
+          <div
+            v-if="quote.new_prices.length > 0"
+            class="pt-1 border-t border-gray-200 dark:border-gray-600 mt-1"
+          >
+            <span class="text-xs text-gray-500 dark:text-gray-400">Price impact:</span>
+            <div class="flex flex-wrap gap-2 mt-1">
+              <span
+                v-for="np in quote.new_prices"
+                :key="np.outcome_id"
+                class="text-xs"
+              >
+                <span class="text-gray-600 dark:text-gray-300">{{ np.label }}:</span>
+                <span class="text-gray-500 dark:text-gray-400">
+                  {{ Math.round((market?.outcomes?.find(o => o.id === np.outcome_id)?.price ?? 0) * 100) }}%
+                </span>
+                <span class="text-gray-400 dark:text-gray-500">-></span>
+                <span class="font-medium" :class="np.price > (market?.outcomes?.find(o => o.id === np.outcome_id)?.price ?? 0) ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'">
+                  {{ Math.round(np.price * 100) }}%
+                </span>
+              </span>
+            </div>
+          </div>
+        </div>
+        <p
+          v-else-if="quoteError"
+          class="text-amber-600 dark:text-amber-400 text-sm"
+        >
+          {{ quoteError }}
+        </p>
 
         <p
           v-if="tradeError"

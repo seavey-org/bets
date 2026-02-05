@@ -51,6 +51,21 @@ export interface SharePosition {
   outcome: MarketOutcome
 }
 
+export interface OutcomePrice {
+  outcome_id: string
+  label: string
+  price: number
+}
+
+export interface Quote {
+  side: 'buy' | 'sell'
+  shares: number
+  cost?: number
+  payout?: number
+  avg_price: number
+  new_prices: OutcomePrice[]
+}
+
 export const useMarketsStore = defineStore('markets', {
   state: () => ({
     markets: [] as Market[],
@@ -127,6 +142,13 @@ export const useMarketsStore = defineStore('markets', {
       const { data } = await api.get(`/groups/${groupId}/positions`)
       this.positions = data
       return data
+    },
+
+    async getQuote(groupId: string, marketId: string, outcomeId: string, shares: number, side: 'buy' | 'sell'): Promise<Quote> {
+      const { data } = await api.get(`/groups/${groupId}/markets/${marketId}/quote`, {
+        params: { outcome_id: outcomeId, shares, side },
+      })
+      return data as Quote
     },
   },
 })

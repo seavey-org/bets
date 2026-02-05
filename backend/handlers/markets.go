@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -181,6 +182,32 @@ func (h *MarketHandler) Trades(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, trades)
+}
+
+func (h *MarketHandler) Quote(c *gin.Context) {
+	marketID := c.Param("mid")
+	outcomeID := c.Query("outcome_id")
+	sharesStr := c.Query("shares")
+	side := c.Query("side")
+
+	if outcomeID == "" || sharesStr == "" || side == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "outcome_id, shares, and side are required"})
+		return
+	}
+
+	var shares float64
+	if _, err := fmt.Sscanf(sharesStr, "%f", &shares); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid shares value"})
+		return
+	}
+
+	quote, err := h.marketService.GetQuote(marketID, outcomeID, shares, side)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, quote)
 }
 
 func (h *MarketHandler) Positions(c *gin.Context) {

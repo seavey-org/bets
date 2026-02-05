@@ -913,3 +913,299 @@ func TestCancelMarket_ReturnsGroupID(t *testing.T) {
 		t.Errorf("expected GroupID %s, got %s", group.ID, groupID)
 	}
 }
+
+// --- GetQuote Tests ---
+
+func TestGetQuote_BinaryMarket_Buy(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "Quote test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 100,
+	})
+
+	quote, err := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 10, "buy")
+	if err != nil {
+		t.Fatalf("GetQuote failed: %v", err)
+	}
+
+	if quote.Side != "buy" {
+		t.Errorf("expected side 'buy', got '%s'", quote.Side)
+	}
+	if quote.Shares != 10 {
+		t.Errorf("expected shares 10, got %f", quote.Shares)
+	}
+	if quote.Cost <= 0 {
+		t.Errorf("expected positive cost, got %f", quote.Cost)
+	}
+	if quote.Payout != 0 {
+		t.Errorf("expected payout 0 for buy, got %f", quote.Payout)
+	}
+	if quote.AvgPrice <= 0 || quote.AvgPrice > 1 {
+		t.Errorf("expected avg_price between 0 and 1, got %f", quote.AvgPrice)
+	}
+	if len(quote.NewPrices) != 2 {
+		t.Fatalf("expected 2 new_prices, got %d", len(quote.NewPrices))
+	}
+
+	// After buying Yes, Yes price should increase, No price should decrease
+	var yesNewPrice, noNewPrice float64
+	for _, np := range quote.NewPrices {
+		if np.Label == "Yes" {
+			yesNewPrice = np.Price
+		} else {
+			noNewPrice = np.Price
+		}
+	}
+	if yesNewPrice <= 0.5 {
+		t.Errorf("expected Yes price to increase above 0.5, got %f", yesNewPrice)
+	}
+	if noNewPrice >= 0.5 {
+		t.Errorf("expected No price to decrease below 0.5, got %f", noNewPrice)
+	}
+	// Prices should still sum to ~1
+	if math.Abs(yesNewPrice+noNewPrice-1) > 0.01 {
+		t.Errorf("expected prices to sum to 1, got %f", yesNewPrice+noNewPrice)
+	}
+}
+
+func TestGetQuote_BinaryMarket_Sell(t *testing.T) {
+	db, marketSvc, _, group, alice, bob := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "Quote sell test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 100,
+	})
+
+	// Bob buys some shares first so he has something to sell
+	_, err := marketSvc.BuyShares(market.ID, bob.ID, TradeRequest{
+		OutcomeID: market.Outcomes[0].ID,
+		Shares:    10,
+	})
+	if err != nil {
+		t.Fatalf("BuyShares failed: %v", err)
+	}
+
+	// Refresh market to get updated pool state
+	if err := db.Preload("Outcomes").First(&market, "id = ?", market.ID).Error; err != nil {
+		t.Fatalf("failed to reload market: %v", err)
+	}
+
+	quote, err := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 5, "sell")
+	if err != nil {
+		t.Fatalf("GetQuote for sell failed: %v", err)
+	}
+
+	if quote.Side != "sell" {
+		t.Errorf("expected side 'sell', got '%s'", quote.Side)
+	}
+	if quote.Payout <= 0 {
+		t.Errorf("expected positive payout, got %f", quote.Payout)
+	}
+	if quote.Cost != 0 {
+		t.Errorf("expected cost 0 for sell, got %f", quote.Cost)
+	}
+}
+
+func TestGetQuote_CostScalesWithShares(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "Cost scaling test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 100,
+	})
+
+	// Get quotes for increasing share amounts
+	quote10, _ := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 10, "buy")
+	quote20, _ := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 20, "buy")
+	quote50, _ := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 50, "buy")
+
+	// Cost should increase with more shares (basic sanity check)
+	if quote20.Cost <= quote10.Cost {
+		t.Errorf("expected cost to increase: 10 shares = %f, 20 shares = %f",
+			quote10.Cost, quote20.Cost)
+	}
+	if quote50.Cost <= quote20.Cost {
+		t.Errorf("expected cost to increase: 20 shares = %f, 50 shares = %f",
+			quote20.Cost, quote50.Cost)
+	}
+
+	// Costs should be whole integers (matching actual trade rounding)
+	if quote10.Cost != float64(int(quote10.Cost)) {
+		t.Errorf("expected integer cost, got %f", quote10.Cost)
+	}
+	if quote20.Cost != float64(int(quote20.Cost)) {
+		t.Errorf("expected integer cost, got %f", quote20.Cost)
+	}
+
+	// Sanity check: avg_price should be between 0 and 1 (probability-based)
+	for _, q := range []*QuoteResult{quote10, quote20, quote50} {
+		if q.AvgPrice <= 0 || q.AvgPrice > 1 {
+			t.Errorf("avg_price %f should be between 0 and 1", q.AvgPrice)
+		}
+	}
+}
+
+func TestGetQuote_TripleOutcomeMarket(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "Triple outcome quote test",
+		Outcomes:  []string{"Red", "Green", "Blue"},
+		Liquidity: 100,
+	})
+
+	quote, err := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 10, "buy")
+	if err != nil {
+		t.Fatalf("GetQuote failed for 3-outcome market: %v", err)
+	}
+
+	if len(quote.NewPrices) != 3 {
+		t.Fatalf("expected 3 new_prices, got %d", len(quote.NewPrices))
+	}
+
+	// Sum of new prices should be ~1
+	sum := 0.0
+	for _, np := range quote.NewPrices {
+		sum += np.Price
+	}
+	if math.Abs(sum-1) > 0.01 {
+		t.Errorf("expected new prices to sum to 1, got %f", sum)
+	}
+}
+
+func TestGetQuote_InvalidInputs(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:    "Invalid inputs test",
+		Outcomes: []string{"Yes", "No"},
+	})
+
+	// Negative shares
+	_, err := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, -5, "buy")
+	if err == nil {
+		t.Error("expected error for negative shares")
+	}
+
+	// Zero shares
+	_, err = marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 0, "buy")
+	if err == nil {
+		t.Error("expected error for zero shares")
+	}
+
+	// Invalid side
+	_, err = marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 10, "invalid")
+	if err == nil {
+		t.Error("expected error for invalid side")
+	}
+
+	// Invalid outcome ID
+	_, err = marketSvc.GetQuote(market.ID, "nonexistent", 10, "buy")
+	if err == nil {
+		t.Error("expected error for nonexistent outcome")
+	}
+
+	// Invalid market ID
+	_, err = marketSvc.GetQuote("nonexistent", market.Outcomes[0].ID, 10, "buy")
+	if err == nil {
+		t.Error("expected error for nonexistent market")
+	}
+}
+
+func TestGetQuote_ClosedMarket(t *testing.T) {
+	_, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:    "Closed market test",
+		Outcomes: []string{"Yes", "No"},
+	})
+
+	// Resolve the market (closes it)
+	_, _ = marketSvc.ResolveMarket(market.ID, market.Outcomes[0].ID, alice.ID, false)
+
+	_, err := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 10, "buy")
+	if err == nil {
+		t.Error("expected error for closed market")
+	}
+}
+
+func TestGetQuote_PredictedPricesMatchActual(t *testing.T) {
+	db, marketSvc, _, group, alice, bob := setupMarketTest(t)
+
+	market, _ := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:     "Price match test",
+		Outcomes:  []string{"Yes", "No"},
+		Liquidity: 100,
+	})
+
+	// Get quote for buying 10 shares
+	quote, err := marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 10, "buy")
+	if err != nil {
+		t.Fatalf("GetQuote failed: %v", err)
+	}
+
+	// Execute the actual trade
+	_, err = marketSvc.BuyShares(market.ID, bob.ID, TradeRequest{
+		OutcomeID: market.Outcomes[0].ID,
+		Shares:    10,
+	})
+	if err != nil {
+		t.Fatalf("BuyShares failed: %v", err)
+	}
+
+	// Reload market to get actual prices
+	var updatedMarket models.Market
+	if err := db.Preload("Outcomes").First(&updatedMarket, "id = ?", market.ID).Error; err != nil {
+		t.Fatalf("failed to reload market: %v", err)
+	}
+	marketSvc.populatePrices(&updatedMarket)
+
+	// Compare predicted prices to actual prices
+	for _, np := range quote.NewPrices {
+		var actualPrice float64
+		for _, o := range updatedMarket.Outcomes {
+			if o.ID == np.OutcomeID {
+				actualPrice = o.Price
+				break
+			}
+		}
+
+		// Prices should match exactly (or very close due to floating point)
+		diff := math.Abs(np.Price - actualPrice)
+		if diff > 0.0001 {
+			t.Errorf("predicted price for %s (%.6f) doesn't match actual (%.6f), diff: %.6f",
+				np.Label, np.Price, actualPrice, diff)
+		}
+	}
+}
+
+func TestGetQuote_ClosesAtExpired(t *testing.T) {
+	db, marketSvc, _, group, alice, _ := setupMarketTest(t)
+
+	// Create market normally, then manually set ClosesAt to the past
+	market, err := marketSvc.CreateMarket(group.ID, alice.ID, CreateMarketRequest{
+		Title:    "Expired market",
+		Outcomes: []string{"Yes", "No"},
+	})
+	if err != nil {
+		t.Fatalf("CreateMarket failed: %v", err)
+	}
+
+	// Set ClosesAt to the past
+	pastTime := time.Now().Add(-1 * time.Hour)
+	if err := db.Model(&market).Update("closes_at", pastTime).Error; err != nil {
+		t.Fatalf("failed to set ClosesAt: %v", err)
+	}
+
+	_, err = marketSvc.GetQuote(market.ID, market.Outcomes[0].ID, 10, "buy")
+	if err == nil {
+		t.Error("expected error for market past ClosesAt")
+	}
+	if err != nil && err.Error() != "market has closed for trading" {
+		t.Errorf("expected 'market has closed for trading', got '%s'", err.Error())
+	}
+}

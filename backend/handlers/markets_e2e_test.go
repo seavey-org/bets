@@ -348,3 +348,204 @@ func TestE2E_Market_ResolvePermissions(t *testing.T) {
 		t.Error("expected non-creator resolve to fail")
 	}
 }
+
+func TestE2E_Market_Quote_Buy(t *testing.T) {
+	env := setupE2E(t)
+	alice := env.registerUser(t, "alice@test.com", "password123", "Alice")
+	bob := env.registerUser(t, "bob@test.com", "password123", "Bob")
+	groupID := createGroupWithMembers(t, env, alice, bob)
+
+	createResp := env.authedRequest(t, "POST", fmt.Sprintf("/api/groups/%s/markets", groupID), map[string]interface{}{
+		"title":     "Quote test",
+		"outcomes":  []string{"Yes", "No"},
+		"liquidity": 100,
+	}, alice)
+	var market struct {
+		ID       string `json:"id"`
+		Outcomes []struct {
+			ID    string `json:"id"`
+			Label string `json:"label"`
+		} `json:"outcomes"`
+	}
+	parseJSON(t, createResp, &market)
+
+	// Get quote for buying 10 shares
+	quoteResp := env.authedRequest(t, "GET",
+		fmt.Sprintf("/api/groups/%s/markets/%s/quote?outcome_id=%s&shares=10&side=buy",
+			groupID, market.ID, market.Outcomes[0].ID),
+		nil, bob)
+
+	if quoteResp.Code != http.StatusOK {
+		t.Fatalf("quote: expected 200, got %d: %s", quoteResp.Code, quoteResp.Body.String())
+	}
+
+	var quote struct {
+		Side      string  `json:"side"`
+		Shares    float64 `json:"shares"`
+		Cost      float64 `json:"cost"`
+		Payout    float64 `json:"payout"`
+		AvgPrice  float64 `json:"avg_price"`
+		NewPrices []struct {
+			OutcomeID string  `json:"outcome_id"`
+			Label     string  `json:"label"`
+			Price     float64 `json:"price"`
+		} `json:"new_prices"`
+	}
+	parseJSON(t, quoteResp, &quote)
+
+	if quote.Side != "buy" {
+		t.Errorf("expected side 'buy', got '%s'", quote.Side)
+	}
+	if quote.Shares != 10 {
+		t.Errorf("expected shares 10, got %f", quote.Shares)
+	}
+	if quote.Cost <= 0 {
+		t.Errorf("expected positive cost, got %f", quote.Cost)
+	}
+	if quote.AvgPrice <= 0 || quote.AvgPrice > 1 {
+		t.Errorf("expected avg_price between 0 and 1, got %f", quote.AvgPrice)
+	}
+	if len(quote.NewPrices) != 2 {
+		t.Fatalf("expected 2 new_prices, got %d", len(quote.NewPrices))
+	}
+
+	// Sum of new prices should be ~1
+	sum := 0.0
+	for _, np := range quote.NewPrices {
+		sum += np.Price
+	}
+	if math.Abs(sum-1) > 0.01 {
+		t.Errorf("expected new prices to sum to 1, got %f", sum)
+	}
+}
+
+func TestE2E_Market_Quote_Sell(t *testing.T) {
+	env := setupE2E(t)
+	alice := env.registerUser(t, "alice@test.com", "password123", "Alice")
+	bob := env.registerUser(t, "bob@test.com", "password123", "Bob")
+	groupID := createGroupWithMembers(t, env, alice, bob)
+
+	createResp := env.authedRequest(t, "POST", fmt.Sprintf("/api/groups/%s/markets", groupID), map[string]interface{}{
+		"title":     "Quote sell test",
+		"outcomes":  []string{"Yes", "No"},
+		"liquidity": 100,
+	}, alice)
+	var market struct {
+		ID       string `json:"id"`
+		Outcomes []struct {
+			ID string `json:"id"`
+		} `json:"outcomes"`
+	}
+	parseJSON(t, createResp, &market)
+
+	// Bob buys first so he has shares to sell
+	env.authedRequest(t, "POST", fmt.Sprintf("/api/groups/%s/markets/%s/buy", groupID, market.ID), map[string]interface{}{
+		"outcome_id": market.Outcomes[0].ID, "shares": 10,
+	}, bob)
+
+	// Get quote for selling 5 shares
+	quoteResp := env.authedRequest(t, "GET",
+		fmt.Sprintf("/api/groups/%s/markets/%s/quote?outcome_id=%s&shares=5&side=sell",
+			groupID, market.ID, market.Outcomes[0].ID),
+		nil, bob)
+
+	if quoteResp.Code != http.StatusOK {
+		t.Fatalf("quote sell: expected 200, got %d: %s", quoteResp.Code, quoteResp.Body.String())
+	}
+
+	var quote struct {
+		Side   string  `json:"side"`
+		Payout float64 `json:"payout"`
+	}
+	parseJSON(t, quoteResp, &quote)
+
+	if quote.Side != "sell" {
+		t.Errorf("expected side 'sell', got '%s'", quote.Side)
+	}
+	if quote.Payout <= 0 {
+		t.Errorf("expected positive payout, got %f", quote.Payout)
+	}
+}
+
+func TestE2E_Market_Quote_RequiresMembership(t *testing.T) {
+	env := setupE2E(t)
+	alice := env.registerUser(t, "alice@test.com", "password123", "Alice")
+	bob := env.registerUser(t, "bob@test.com", "password123", "Bob")
+	charlie := env.registerUser(t, "charlie@test.com", "password123", "Charlie")
+	groupID := createGroupWithMembers(t, env, alice, bob)
+
+	createResp := env.authedRequest(t, "POST", fmt.Sprintf("/api/groups/%s/markets", groupID), map[string]interface{}{
+		"title":     "Private quote",
+		"outcomes":  []string{"A", "B"},
+		"liquidity": 100,
+	}, alice)
+	var market struct {
+		ID       string `json:"id"`
+		Outcomes []struct {
+			ID string `json:"id"`
+		} `json:"outcomes"`
+	}
+	parseJSON(t, createResp, &market)
+
+	// Charlie (not a member) tries to get a quote
+	quoteResp := env.authedRequest(t, "GET",
+		fmt.Sprintf("/api/groups/%s/markets/%s/quote?outcome_id=%s&shares=10&side=buy",
+			groupID, market.ID, market.Outcomes[0].ID),
+		nil, charlie)
+
+	if quoteResp.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for non-member quote, got %d", quoteResp.Code)
+	}
+}
+
+func TestE2E_Market_Quote_InvalidParams(t *testing.T) {
+	env := setupE2E(t)
+	alice := env.registerUser(t, "alice@test.com", "password123", "Alice")
+	bob := env.registerUser(t, "bob@test.com", "password123", "Bob")
+	groupID := createGroupWithMembers(t, env, alice, bob)
+
+	createResp := env.authedRequest(t, "POST", fmt.Sprintf("/api/groups/%s/markets", groupID), map[string]interface{}{
+		"title":     "Invalid params",
+		"outcomes":  []string{"A", "B"},
+		"liquidity": 100,
+	}, alice)
+	var market struct {
+		ID       string `json:"id"`
+		Outcomes []struct {
+			ID string `json:"id"`
+		} `json:"outcomes"`
+	}
+	parseJSON(t, createResp, &market)
+
+	// Missing outcome_id
+	resp1 := env.authedRequest(t, "GET",
+		fmt.Sprintf("/api/groups/%s/markets/%s/quote?shares=10&side=buy", groupID, market.ID),
+		nil, bob)
+	if resp1.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing outcome_id, got %d", resp1.Code)
+	}
+
+	// Missing shares
+	resp2 := env.authedRequest(t, "GET",
+		fmt.Sprintf("/api/groups/%s/markets/%s/quote?outcome_id=%s&side=buy", groupID, market.ID, market.Outcomes[0].ID),
+		nil, bob)
+	if resp2.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing shares, got %d", resp2.Code)
+	}
+
+	// Missing side
+	resp3 := env.authedRequest(t, "GET",
+		fmt.Sprintf("/api/groups/%s/markets/%s/quote?outcome_id=%s&shares=10", groupID, market.ID, market.Outcomes[0].ID),
+		nil, bob)
+	if resp3.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing side, got %d", resp3.Code)
+	}
+
+	// Invalid side
+	resp4 := env.authedRequest(t, "GET",
+		fmt.Sprintf("/api/groups/%s/markets/%s/quote?outcome_id=%s&shares=10&side=invalid", groupID, market.ID, market.Outcomes[0].ID),
+		nil, bob)
+	if resp4.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid side, got %d", resp4.Code)
+	}
+}

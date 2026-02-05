@@ -610,6 +610,106 @@ func (s *MarketService) GetMarketTrades(marketID string) ([]models.Trade, error)
 	return trades, err
 }
 
+// OutcomePrice represents the price of an outcome after a hypothetical trade.
+type OutcomePrice struct {
+	OutcomeID string  `json:"outcome_id"`
+	Label     string  `json:"label"`
+	Price     float64 `json:"price"`
+}
+
+// QuoteResult contains the estimated cost/payout for a hypothetical trade.
+type QuoteResult struct {
+	Side      string         `json:"side"`
+	Shares    float64        `json:"shares"`
+	Cost      float64        `json:"cost,omitempty"`   // for buy (points spent)
+	Payout    float64        `json:"payout,omitempty"` // for sell (points received)
+	AvgPrice  float64        `json:"avg_price"`        // average price per share
+	NewPrices []OutcomePrice `json:"new_prices"`       // prices after trade
+}
+
+// GetQuote calculates the cost or payout for a hypothetical trade without executing it.
+// This allows users to preview what a trade will cost before committing.
+func (s *MarketService) GetQuote(marketID, outcomeID string, shares float64, side string) (*QuoteResult, error) {
+	if shares <= 0 {
+		return nil, fmt.Errorf("shares must be positive")
+	}
+	if side != "buy" && side != "sell" {
+		return nil, fmt.Errorf("side must be 'buy' or 'sell'")
+	}
+
+	var market models.Market
+	if err := s.db.Preload("Outcomes").First(&market, "id = ?", marketID).Error; err != nil {
+		return nil, fmt.Errorf("market not found")
+	}
+
+	if market.Status != models.MarketStatusOpen {
+		return nil, fmt.Errorf("market is not open for trading")
+	}
+	if market.ClosesAt != nil && time.Now().After(*market.ClosesAt) {
+		return nil, fmt.Errorf("market has closed for trading")
+	}
+
+	// Find the target outcome index
+	targetIdx := -1
+	for i, o := range market.Outcomes {
+		if o.ID == outcomeID {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx == -1 {
+		return nil, fmt.Errorf("outcome not found in market")
+	}
+
+	result := &QuoteResult{
+		Side:   side,
+		Shares: shares,
+	}
+
+	// Create a copy of outcomes to simulate the trade
+	simOutcomes := make([]models.MarketOutcome, len(market.Outcomes))
+	copy(simOutcomes, market.Outcomes)
+
+	if side == "buy" {
+		cost := s.calculateBuyCost(market.Outcomes, targetIdx, shares)
+		if cost >= math.MaxFloat64/2 {
+			return nil, fmt.Errorf("trade would exhaust liquidity")
+		}
+		// Round to integer like actual BuyShares does (math.Ceil to int)
+		result.Cost = float64(int(math.Ceil(cost)))
+		result.AvgPrice = result.Cost / shares
+
+		// Simulate: remove shares from target (matches actual BuyShares implementation)
+		simOutcomes[targetIdx].Shares -= shares
+		if simOutcomes[targetIdx].Shares < 0.001 {
+			return nil, fmt.Errorf("not enough liquidity for this trade")
+		}
+	} else {
+		payout := s.calculateSellPayout(market.Outcomes, targetIdx, shares)
+		if payout <= 0 {
+			return nil, fmt.Errorf("insufficient liquidity for this sale")
+		}
+		// Round to integer like actual SellShares does (math.Floor to int)
+		result.Payout = float64(int(math.Floor(payout)))
+		result.AvgPrice = result.Payout / shares
+
+		// Simulate: add shares back to target (matches actual SellShares implementation)
+		simOutcomes[targetIdx].Shares += shares
+	}
+
+	// Calculate new prices after the simulated trade
+	result.NewPrices = make([]OutcomePrice, len(simOutcomes))
+	for i, o := range simOutcomes {
+		result.NewPrices[i] = OutcomePrice{
+			OutcomeID: o.ID,
+			Label:     o.Label,
+			Price:     s.GetPrice(simOutcomes, i),
+		}
+	}
+
+	return result, nil
+}
+
 // --- CPMM Math ---
 
 // calculateBuyCost calculates the cost in points to buy `shares` of outcome at targetIdx.

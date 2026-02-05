@@ -99,6 +99,7 @@ func main() {
 			groupRoutes.POST("/markets/:mid/resolve", marketHandler.Resolve)
 			groupRoutes.POST("/markets/:mid/cancel", marketHandler.Cancel)
 			groupRoutes.GET("/markets/:mid/trades", marketHandler.Trades)
+			groupRoutes.GET("/markets/:mid/quote", marketHandler.Quote)
 			groupRoutes.GET("/positions", marketHandler.Positions)
 
 			// Admin-only
