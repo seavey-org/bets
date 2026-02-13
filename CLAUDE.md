@@ -127,7 +127,8 @@ GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push/PR to main:
 Docker multi-stage build. CI/CD via GitHub Actions deploys to `192.168.86.227`.
 
 Required GitHub Secrets:
-- `DEPLOY_SSH_KEY` - SSH key for production server
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
 - `JWT_SECRET`
 - `CLOUDFLARE_ZONE_ID` / `CLOUDFLARE_API_TOKEN`
+
+SSH deploys use the runner user's existing key in `~/.ssh`.
